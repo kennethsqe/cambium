@@ -179,10 +179,9 @@ export class Budget {
 /**
  * Apply usage + tool-call accounting from a trace step.
  *
- * - Adds tokens from step.meta.usage.total_tokens when present.
- * - Increments tool calls for:
- *   - ToolCall steps (1, tagged with step.meta.tool)
- *   - AgenticTurn steps (meta.tool_calls.length)
+ * AgenticTurn tool calls are not charged here: the agentic loop already
+ * charges each dispatch as it happens, so charging its traceSteps again
+ * bills every agentic call twice. Token usage is still counted.
  */
 export function trackBudgetFromTraceStep(budget: Budget, step: any): void {
   const usage = step?.meta?.usage;
@@ -190,15 +189,6 @@ export function trackBudgetFromTraceStep(budget: Budget, step: any): void {
 
   if (step?.type === 'ToolCall' && step?.ok) {
     budget.addToolCall(step?.meta?.tool);
-  }
-
-  if (step?.type === 'AgenticTurn') {
-    const calls = Array.isArray(step?.meta?.tool_calls) ? step.meta.tool_calls : [];
-    for (const c of calls) {
-      // Tool name may live under c.tool or c.function.name depending on turn shape.
-      const name = c?.tool ?? c?.function?.name;
-      budget.addToolCall(name);
-    }
   }
 }
 
