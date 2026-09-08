@@ -34,6 +34,18 @@ testOverrideHandlers['probe'] = async (input: any) => {
   return { value: input.q };
 };
 
+(registry as any).defs.set('boom', {
+  name: 'boom',
+  description: 'always throws',
+  permissions: { pure: true },
+  inputSchema: {},
+  outputSchema: {},
+});
+testOverrideHandlers['boom'] = async () => {
+  dispatched += 1;
+  throw new Error('tool exploded');
+};
+
 const SCHEMA = {
   $id: 'ProbeOut',
   type: 'object',
@@ -120,6 +132,49 @@ describe('agentic tool-call budget accounting', () => {
     // runGen's post-loop walk must not push an at-cap run over.
     expect(() => walkTraceSteps(budget, result.traceSteps)).not.toThrow();
     expect(budget.toolCallsUsed).toBe(8);
+  });
+
+  it('charges a failed dispatch, so a broken tool cannot be retried for free', async () => {
+    dispatched = 0;
+    const budget = new Budget({ max_tool_calls: 10 }, {});
+    const toolsOpenAI = registry.toOpenAIFormat(['boom']);
+    let turn = 0;
+    const model = async (opts: any) => {
+      turn += 1;
+      if ((opts?.tools?.length ?? 0) > 0 && turn <= 3) {
+        return {
+          message: {
+            content: null,
+            tool_calls: [{ id: `x${turn}`, type: 'function', function: { name: 'boom', arguments: '{}' } }],
+          },
+          usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+        };
+      }
+      return {
+        message: { content: '{"answer":"done"}', tool_calls: null },
+        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+      };
+    };
+
+    const result = await handleAgenticGenerate(
+      STEP, IR, SCHEMA, toolsOpenAI, registry, ['boom'],
+      model as any, (raw: string) => JSON.parse(raw), 10,
+      { budget } as any, { documents: [], groundingTextByKey: {} } as any,
+    );
+
+    expect(dispatched).toBe(3);
+    expect(budget.toolCallsUsed).toBe(3);
+    expect(result.parsed).toEqual({ answer: 'done' });
+    expect(() => walkTraceSteps(budget, result.traceSteps)).not.toThrow();
+    expect(budget.toolCallsUsed).toBe(3);
+  });
+
+  it('does not charge a call the budget gate refused', async () => {
+    // The gate refuses before dispatch, so the refusal itself must not count.
+    const { budget } = await run(4, 5);
+
+    expect(dispatched).toBe(4);
+    expect(budget.toolCallsUsed).toBe(4);
   });
 
   it('refuses the call that would cross the cap and still returns output', async () => {

@@ -57,6 +57,18 @@ export class Budget {
    * Record a single tool invocation.
    * Increments both the per-run `tool_calls_used` counter and the per-tool
    * `calls` counter so both limits are checked on the same event.
+   *
+   * Charging contract for an agentic tool call — each is charged exactly once,
+   * at the point of dispatch:
+   *
+   *   succeeded            1x  (executeToolCall, after the handler returns)
+   *   dispatched and threw 1x  (the loop's catch — a broken tool must not be
+   *                             retryable for free)
+   *   memoized duplicate   1x  (skipped re-dispatch still consumes budget)
+   *   refused by the gate  0x  (checkBeforeCall rejected it; it never ran)
+   *
+   * Nothing charges an agentic call a second time from its trace step — see
+   * trackBudgetFromTraceStep.
    */
   addToolCall(tool?: string): void {
     this.state.tool_calls_used += 1;
